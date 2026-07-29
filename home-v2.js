@@ -1,5 +1,7 @@
 (() => {
 'use strict';
+const readabilityHref='readability.css?v=20260729-2';
+if(!document.querySelector('link[data-readability-fix]')){const link=document.createElement('link');link.rel='stylesheet';link.href=readabilityHref;link.dataset.readabilityFix='true';document.head.appendChild(link);}
 const CART='cw-cart-v3',FAV='cw-favorites-v3',CMP='cw-compare-v3';
 const PRODUCTS={
 'lavazza-qualita-oro':{name:'Lavazza Qualità Oro',price:1890,image:document.querySelector('[data-add="lavazza-qualita-oro"]')?.closest('.product')?.querySelector('img')?.src},
