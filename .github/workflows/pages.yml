@@ -1,4 +1,4 @@
-name: Deploy Coffee World to GitHub Pages
+name: Publish Coffee World static site
 
 on:
   push:
@@ -6,31 +6,101 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Rebuild static site
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Restore and repair static site
         run: |
-          mkdir -p _site
+          rm -rf repaired
+          mkdir repaired
           base64 -d site.zip.b64 > site.zip
-          unzip -q site.zip -d _site
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          unzip -q site.zip -d repaired
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('repaired')
+
+          def image_for(alt: str) -> str:
+              text = alt.lower()
+              rules = [
+                  (('lavazza', 'кофе в зернах', 'кофе арабика'), 'assets/p1.jpg'),
+                  (('delonghi', 'кофемашин'), 'assets/p2.jpg'),
+                  (('monin', 'сироп'), 'assets/p3.jpg'),
+                  (('timemore', 'кофемол'), 'assets/p4.jpg'),
+                  (('капсул',), 'assets/capsule.jpg'),
+                  (('аксессуар',), 'assets/accessory.jpg'),
+                  (('чистк',), 'assets/clean.jpg'),
+                  (('лояльност',), 'assets/loyalty.jpg'),
+                  (('аренд',), 'assets/rental.jpg'),
+                  (('корпоратив', 'бизнес'), 'assets/coffee.jpg'),
+              ]
+              for words, path in rules:
+                  if any(word in text for word in words):
+                      return path
+              return 'assets/beans.jpg'
+
+          for path in root.glob('*.html'):
+              text = path.read_text(encoding='utf-8')
+              text = text.replace('<link href="content.html" rel="icon"/>', '<link href="favicon.svg" rel="icon"/>', 1)
+              text = text.replace('<link href="content.html" rel="stylesheet"/>', '<link href="styles.css" rel="stylesheet"/>', 1)
+              text = text.replace('<script src="content.html"></script>', '<script src="app.js"></script>')
+              text = text.replace('href="/"', 'href="index.html"')
+
+              def replace_img(match):
+                  tag = match.group(0)
+                  alt_match = re.search(r'alt="([^"]*)"', tag)
+                  alt = alt_match.group(1) if alt_match else ''
+                  return tag.replace('src="content.html"', f'src="{image_for(alt)}"')
+
+              text = re.sub(r'<img[^>]*src="content\.html"[^>]*>', replace_img, text)
+              path.write_text(text, encoding='utf-8')
+
+          css = root / 'styles.css'
+          if css.exists():
+              text = css.read_text(encoding='utf-8')
+              text = text.replace("url('/", "url('").replace('url("/', 'url("').replace('url(/', 'url(')
+              css.write_text(text, encoding='utf-8')
+
+          app = r'''(() => {
+            'use strict';
+            const CART='coffee-world-public-cart';
+            const USER='coffee-world-public-user';
+            const fmt=n=>new Intl.NumberFormat('ru-RU').format(n)+' ₽';
+            const read=()=>{try{return JSON.parse(localStorage.getItem(CART)||'[]')}catch{return[]}};
+            const save=c=>{localStorage.setItem(CART,JSON.stringify(c)); counters(c)};
+            const counters=(c=read())=>document.querySelectorAll('[data-cart-count]').forEach(n=>n.textContent=String(c.reduce((s,x)=>s+(+x.quantity||1),0)));
+            const price=s=>Number(String(s||'').replace(/\D/g,''))||0;
+            const toast=m=>{let x=document.createElement('div');x.style.cssText='position:fixed;right:18px;bottom:80px;z-index:9999;background:#2b1b13;color:#fff;padding:14px 18px;border-radius:14px;box-shadow:0 14px 40px #0005';x.textContent=m;document.body.append(x);setTimeout(()=>x.remove(),2600)};
+            document.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{let card=b.closest('.product,article'),name=card?.querySelector('h1,h3')?.textContent?.trim()||'Товар',p=price(card?.querySelector('.product-foot strong,.price-line strong,strong')?.textContent),image=card?.querySelector('img')?.getAttribute('src')||'assets/p1.jpg',c=read(),f=c.find(x=>x.name===name);f?f.quantity++:c.push({name,price:p,image,quantity:1});save(c);toast(name+' добавлен в корзину')});
+            function totals(c){let sum=c.reduce((s,x)=>s+x.price*x.quantity,0),discount=localStorage.getItem('coffee-world-promo')==='COFFEE10'?Math.round(sum*.1):0,delivery=sum-discount>=2500||!sum?0:390;return{sum,discount,delivery,total:sum-discount+delivery}}
+            function render(){let host=document.querySelector('[data-cart-items]');if(!host)return;let c=read();host.innerHTML=c.length?c.map((x,i)=>`<article class="cart-item" data-i="${i}"><img src="${x.image}" alt="${x.name}"><div><h3>${x.name}</h3><div class="quantity"><button data-minus>−</button><span>${x.quantity}</span><button data-plus>+</button></div><button class="text-button" data-remove>Удалить</button></div><strong>${fmt(x.price*x.quantity)}</strong></article>`).join(''):'<section class="panel empty-state"><h2>Корзина пуста</h2><p>Добавьте товары из каталога.</p><a class="button primary" href="catalog.html">Перейти в каталог</a></section>';host.querySelectorAll('[data-plus]').forEach(b=>b.onclick=()=>{let i=+b.closest('[data-i]').dataset.i;c[i].quantity++;save(c);render()});host.querySelectorAll('[data-minus]').forEach(b=>b.onclick=()=>{let i=+b.closest('[data-i]').dataset.i;c[i].quantity=Math.max(1,c[i].quantity-1);save(c);render()});host.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{c.splice(+b.closest('[data-i]').dataset.i,1);save(c);render()});let t=totals(c);document.querySelectorAll('[data-summary-products]').forEach(n=>n.textContent=fmt(t.sum));document.querySelectorAll('[data-summary-discount]').forEach(n=>n.textContent=t.discount?'−'+fmt(t.discount):'0 ₽');document.querySelectorAll('[data-summary-delivery]').forEach(n=>n.textContent=t.delivery?fmt(t.delivery):'Бесплатно');document.querySelectorAll('[data-summary-total]').forEach(n=>n.textContent=fmt(t.total))}
+            document.querySelector('[data-promo-apply]')?.addEventListener('click',()=>{let v=document.querySelector('[data-promo]')?.value.trim().toUpperCase();if(v==='COFFEE10'){localStorage.setItem('coffee-world-promo',v);render();toast('Скидка 10% применена')}else toast('Используйте промокод COFFEE10')});
+            document.querySelectorAll('form.search,[data-search-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();let q=f.querySelector('input')?.value.trim();location.href='catalog.html'+(q?'?q='+encodeURIComponent(q):'')});
+            document.querySelector('[data-login-form]')?.addEventListener('submit',e=>{e.preventDefault();if(!e.target.reportValidity())return;localStorage.setItem(USER,e.target.querySelector('[name=login]').value);toast('Вход выполнен');setTimeout(()=>location.href='account.html',400)});
+            document.querySelectorAll('[data-api-form]').forEach(f=>f.onsubmit=e=>{e.preventDefault();if(f.reportValidity()){toast(f.dataset.success||'Заявка отправлена');f.reset()}});
+            document.querySelectorAll('[data-api-click]').forEach(b=>b.onclick=()=>toast(b.dataset.success||'Заявка отправлена'));
+            document.querySelector('[data-checkout-submit]')?.addEventListener('click',()=>{let c=read();if(!c.length)return toast('Корзина пуста');let id='CW-'+Date.now().toString().slice(-6);localStorage.setItem('coffee-world-last-order',id);save([]);let out=document.querySelector('[data-checkout-result]');if(out)out.innerHTML=`<div class="success-card"><h2>Заказ ${id} принят</h2><p>Данные сохранены в браузере.</p><a class="button primary" href="account.html">Перейти в кабинет</a></div>`;toast('Заказ оформлен')});
+            let cups=document.querySelector('[data-rental-cups]'),out=document.querySelector('[data-rental-price]');if(cups&&out){let calc=()=>out.textContent='от '+new Intl.NumberFormat('ru-RU').format(3900+Math.ceil((+cups.value||50)/25)*1000)+' ₽/мес.';cups.oninput=calc;calc()}
+            counters();render();
+          })();'''
+          (root / 'app.js').write_text(app, encoding='utf-8')
+          (root / '.nojekyll').write_text('', encoding='utf-8')
+          PY
+
+      - name: Publish gh-pages branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan gh-pages
+          git rm -rf .
+          cp -a repaired/. .
+          git add -A
+          git commit -m "Publish Coffee World web version"
+          git push --force origin gh-pages
